@@ -23,8 +23,16 @@ def read_register(x):
     return bottom(x, 3)
 
 
+def bit_not(n, numbits=8):
+    return (1 << numbits) - 1 - n
+
+
 class CPU:
     """Main CPU class."""
+
+IM = 5
+IS = 6
+SP = 7
 
 
 # * `PC`: Program Counter, address of the currently executing instruction
@@ -46,11 +54,14 @@ class CPU:
         self.mar = 0  # memory address register (is being read or written to)
         self.mdr = 0  # memory data register (was read or written to)
         self.fl = 0
-        self.sp = 0xf3
+        self.reg[7] = 0xf3 # stack pointer
 
 
         # SP Stack Pointer. Points to the top of the stack
         # self.sp
+
+    def get_interrupt(self, i):
+        return self.ram[0xff - i]
 
 
     def load(self, program=None):
@@ -99,10 +110,25 @@ class CPU:
                 self.fl = 2
             elif self.reg[a] > self.reg[b]:
                 self.fl = 3
-
-
-        elif op == 0xA8:
+        elif op == 0xA8: # and
             self.reg[a] &= self.reg[b]
+        elif op == 0xAA: # or
+            self.reg[a] |= self.reg[b]
+        elif op == 0xAB: # xor
+            self.reg[a] ^= self.reg[b]
+        elif op == 0x69: # not
+            self.reg[a] = bit_not(self.reg[a], numbits=8)
+        elif op == 0xAC: # shl
+            self.reg[a] <<= self.reg[b]
+        elif op == 0xAD: # shl
+            self.reg[a] >>= self.reg[b]
+        elif op == 0xA4: # mod
+            if self.reg[b] == 0:
+                raise Exception('Mod by 0')
+            self.reg[a] %= self.reg[b]
+        elif op == 0x99: # addi
+            self.reg[a] += b
+
         else:
             raise Exception("Unsupported ALU operation")
 
@@ -130,12 +156,20 @@ class CPU:
             else:
                 self.pc += 2
             self.fl = 0
-        elif op == 0x56:
+        elif op == 0x56: #jne
             if self.fl == 1 or self.fl == 3: # neq
                 self.pc = self.reg[a]
             else:
                 self.pc += 2
             self.fl = 0
+        elif op == 0x52: # int
+            self.reg[IS] |= (1 << self.reg[a])
+        elif op == 0x13: # iret
+            for i in range(6, -1, -1):
+                self.reg[i] = self.stack_pop()
+            self.fl = self.stack_pop()
+            self.pc = self.stack_pop()
+            self.interrupts_enabled = True
 
 
     def trace(self):
@@ -184,12 +218,35 @@ class CPU:
         if c == 0:
             self.pc += 1 + a2
 
+    def handle_interrupts(self):
+        if self.reg[IM] != 0 and self.interrupts_enabled:
+            maskedInterrupts = self.reg[IS]  & self.reg[IM]
+            i = 0
+            while maskedInterrupts > 0:
+                interrupt = maskedInterrupts & 1
+                if interrupt:
+                    # disable further interrupts
+                    self.interrupts_enabled = False
+                    self.reg[IS] &= bit_not(i) # clear the bit (set nth bit to 0)
+                    self.stack_push(self.pc)
+                    self.stack_push(self.fl)
+                    for i in range(0, 7, 1):
+                        self.stack_push(self.reg[i])
+
+                    interupt_handler = self.get_interrupt(i)
+                    self.pc = interrupt_handler
+
+                maskedInterrupts >>= 2
+                i += 1
+
+
 
     def run(self):
         """Run the CPU."""
         self.trace()
         while True:
             self.read_opcode()
+            self.handle_interrupts()
 #            print(self.ram)
 #            input()
 
@@ -210,13 +267,13 @@ class CPU:
 
 
     def stack_push(self, value):
-        self.ram[self.sp] = value
-        self.sp -= 1
+        self.ram[self.reg[7]] = value
+        self.reg[7] -= 1
 
 
     def stack_pop(self):
-        self.sp += 1
-        value = self.ram[self.sp]
+        self.reg[7] += 1
+        value = self.ram[self.reg[7]]
         return value
 
 
